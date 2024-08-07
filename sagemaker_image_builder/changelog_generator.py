@@ -2,7 +2,7 @@ import os
 
 from semver import Version
 
-from utils import get_dir_for_version, get_match_specs, get_semver
+from sagemaker_image_builder.utils import get_dir_for_version, get_match_specs, get_semver
 
 
 def _derive_changeset(target_version_dir, source_version_dir, image_config) -> (dict[str, list[str]], dict[str, str]):

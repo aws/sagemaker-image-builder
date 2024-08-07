@@ -1,5 +1,6 @@
 import json
 import os
+import pathlib
 
 import conda.cli.python_api
 from conda.env.specs import RequirementsSpec
@@ -33,6 +34,9 @@ def get_semver(version_str) -> Version:
     # so we keep the first 3 entries as version string.
     if version_str.count(".") > 2:
         version_str = ".".join(version_str.split(".")[:3])
+    # If the version string doesn't include the patch version number, then assume it's 0.
+    if version_str.count(".") == 1:
+        version_str = f"{version_str}.0"
     version = Version.parse(version_str)
     if version.build is not None:
         raise Exception()
@@ -86,20 +90,50 @@ def create_markdown_table(headers, rows):
     return markdowntable
 
 
+def dump_conda_package_metadata(args):
+    prefix = os.environ["CONDA_PREFIX"]
+    meta_data_path = pathlib.Path(prefix) / "conda-meta"
+    meta_data_files = meta_data_path.glob("*.json")
+
+    meta_data = dict()
+    for meta_data_file in meta_data_files:
+        name = meta_data_file.name.split("-")[0]
+        with open(meta_data_file, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+            version = metadata["version"]
+            size = metadata["size"]
+        meta_data[name] = {"version": version, "size": size}
+
+    # Sort the pakcage sizes in decreasing order
+    meta_data = {k: v for k, v in sorted(meta_data.items(), key=lambda item: item[1]["size"], reverse=True)}
+
+    if args.human_readable:
+        meta_data = {k: {"version": v["version"], "size": sizeof_fmt(v["size"])} for k, v in meta_data.items()}
+
+    print(json.dumps(meta_data))
+
+
 def pull_conda_package_metadata(image_config, image_artifact_dir):
     results = dict()
     env_out_file_name = image_config["env_out_filename"]
     match_spec_out = get_match_specs(image_artifact_dir + "/" + env_out_file_name)
 
-    target_packages_match_spec_out = {k: v for k, v in match_spec_out.items()}
+    target_packages_match_spec_out = {
+        k: v for k, v in match_spec_out.items()
+    }
 
     for package, match_spec_out in target_packages_match_spec_out.items():
         if str(match_spec_out).startswith("conda-forge"):
             # Pull package metadata from conda-forge and dump into json file
-            search_result = conda.cli.python_api.run_command("search", str(match_spec_out), "--json")
+            search_result = conda.cli.python_api.run_command(
+                "search", str(match_spec_out), "--json"
+            )
             package_metadata = json.loads(search_result[0])[package][0]
-            results[package] = {"version": package_metadata["version"], "size": package_metadata["size"]}
-    # Sort the pakcage sizes in decreasing order
+            results[package] = {
+                "version": package_metadata["version"],
+                "size": package_metadata["size"]
+            }
+    # Sort the package sizes in decreasing order
     results = {k: v for k, v in sorted(results.items(), key=lambda item: item[1]["size"], reverse=True)}
 
     return results

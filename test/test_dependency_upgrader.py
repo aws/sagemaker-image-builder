@@ -3,7 +3,7 @@ from __future__ import absolute_import
 import pytest
 
 pytestmark = pytest.mark.unit
-from dependency_upgrader import (
+from sagemaker_image_builder.dependency_upgrader import (
     _MAJOR,
     _MINOR,
     _PATCH,

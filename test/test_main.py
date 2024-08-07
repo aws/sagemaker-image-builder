@@ -7,11 +7,11 @@ import pytest
 pytestmark = pytest.mark.unit
 
 import os
+import json
 from unittest.mock import MagicMock, Mock, patch
 
-from changelog_generator import _derive_changeset
-from config import _image_generator_configs
-from main import (
+from sagemaker_image_builder.changelog_generator import _derive_changeset
+from sagemaker_image_builder.main import (
     _get_config_for_image,
     _get_version_tags,
     _push_images_upstream,
@@ -21,27 +21,32 @@ from main import (
     create_minor_version_artifacts,
     create_patch_version_artifacts,
 )
-from release_notes_generator import (
+from sagemaker_image_builder.release_notes_generator import (
     _get_image_type_package_metadata,
     _get_package_to_image_type_mapping,
 )
-from utils import get_semver
+from sagemaker_image_builder.utils import get_semver
+
+with open("test/test_image_config.json") as jsonfile:
+    _image_generator_configs = json.load(jsonfile)
 
 
 class CreateVersionArgs:
-    def __init__(self, runtime_version_upgrade_type, base_patch_version, pre_release_identifier=None, force=False):
+    def __init__(self, runtime_version_upgrade_type, base_patch_version, image_config_file, pre_release_identifier=None, force=False):
         self.base_patch_version = base_patch_version
         self.runtime_version_upgrade_type = runtime_version_upgrade_type
         self.pre_release_identifier = pre_release_identifier
         self.force = force
+        self.image_config_file = image_config_file
 
 
 class BuildImageArgs:
-    def __init__(self, target_patch_version, target_ecr_repo=None, force=False):
+    def __init__(self, target_patch_version, image_config_file, target_ecr_repo=None, force=False):
         self.target_patch_version = target_patch_version
         self.target_ecr_repo = target_ecr_repo
         self.skip_tests = True
         self.force = force
+        self.image_config_file = image_config_file
 
 
 def _create_docker_cpu_env_in_file(file_path, required_package="conda-forge::ipykernel"):
@@ -107,20 +112,28 @@ def _create_new_version_artifacts_helper(mocker, tmp_path, version, target_versi
         # get_dir_for_version returns a str and not PosixPath
         return str(tmp_path) + "/" + version_string
 
-    mocker.patch("main.get_dir_for_version", side_effect=mock_get_dir_for_version)
+    mocker.patch("sagemaker_image_builder.main.get_dir_for_version", side_effect=mock_get_dir_for_version)
     input_version = get_semver(version)
     # Create directory for base version
-    input_version_dir = create_and_get_semver_dir(input_version)
+    input_version_dir = create_and_get_semver_dir(input_version, _image_generator_configs)
     # Create env.in and env.out for base version
     _create_docker_cpu_env_in_file(input_version_dir + "/cpu.env.in")
     _create_docker_gpu_env_in_file(input_version_dir + "/gpu.env.in")
     _create_docker_cpu_env_out_file(input_version_dir + "/cpu.env.out")
     _create_docker_gpu_env_out_file(input_version_dir + "/gpu.env.out")
     _create_prev_docker_file(input_version_dir + "/Dockerfile")
-    os.makedirs(tmp_path / "template")
+    file_path = tmp_path / "template"
+    if file_path.exists():
+        print(f"The file {file_path} already exists. Skipping creation.")
+    else:
+        os.makedirs(tmp_path / "template")
     next_version = get_semver(target_version)
     next_major_version = "v" + str(next_version.major)
-    os.makedirs(tmp_path / "template" / next_major_version)
+    file_path = tmp_path / "template" / next_major_version
+    if file_path.exists():
+        print(f"The file {file_path} already exists. Skipping creation.")
+    else:
+        os.makedirs(tmp_path / "template" / next_major_version)
     if next_version.major == 1:
         # Create dirs directory under template
         os.makedirs(tmp_path / "template" / next_major_version / "dirs")
@@ -138,10 +151,10 @@ def _create_additional_packages_env_in_file_helper(
             # get_dir_for_version returns a str and not PosixPath
             return str(tmp_path) + "/" + version_string
 
-        mocker.patch("main.get_dir_for_version", side_effect=mock_get_dir_for_version)
+        mocker.patch("sagemaker_image_builder.main.get_dir_for_version", side_effect=mock_get_dir_for_version)
         input_version = get_semver(version)
         # Create directory for new version
-        input_version_dir = create_and_get_semver_dir(input_version)
+        input_version_dir = create_and_get_semver_dir(input_version, _image_generator_configs)
         additional_env_in_file_path = input_version_dir + "/gpu.additional_packages_env.in"
         if use_existing_package_as_additional_package:
             # Using an older version of numpy.
@@ -150,7 +163,6 @@ def _create_additional_packages_env_in_file_helper(
             )
         else:
             _create_additional_packages_gpu_env_in_file(additional_env_in_file_path)
-
 
 def test_get_semver_version():
     # Test invalid version string.
@@ -169,13 +181,13 @@ def test_get_semver_version():
 
 def test_new_version_artifacts_for_an_input_prerelease_version():
     input_version = "1.23.0-beta"
-    args = CreateVersionArgs("patch", input_version, pre_release_identifier="new-beta")
+    args = CreateVersionArgs("patch", input_version, _image_generator_configs)
     with pytest.raises(Exception):
         create_patch_version_artifacts(args)
-    args = CreateVersionArgs("minor", input_version, pre_release_identifier="new-beta")
+    args = CreateVersionArgs("minor", input_version, _image_generator_configs)
     with pytest.raises(Exception):
         create_minor_version_artifacts(args)
-    args = CreateVersionArgs("major", input_version, pre_release_identifier="new-beta")
+    args = CreateVersionArgs("major", input_version, _image_generator_configs)
     with pytest.raises(Exception):
         create_major_version_artifacts(args)
 
@@ -189,19 +201,19 @@ def test_create_and_get_semver_dir(mock_list_dir, mock_make_dirs, mock_rmtree, m
     # case 1: Directory exists and exist_ok is False => Throws Exception
     mock_path_exists.return_value = True
     with pytest.raises(Exception):
-        create_and_get_semver_dir(get_semver("1.124.5"))
+        create_and_get_semver_dir(get_semver("1.124.5"), _image_generator_configs)
     # Case 2: Instead of a directory in the path, a file exists.
     mock_path_is_dir.return_value = False
     with pytest.raises(Exception):
-        create_and_get_semver_dir(get_semver("1.124.5"), True)
+        create_and_get_semver_dir(get_semver("1.124.5"), _image_generator_configs, True)
     # Happy case
     mock_path_is_dir.return_value = True
     mock_list_dir.return_value = []
-    assert create_and_get_semver_dir(get_semver("1.124.5"), True) is not None
+    assert create_and_get_semver_dir(get_semver("1.124.5"), _image_generator_configs, True) is not None
 
 
 def test_create_new_version_artifacts_for_invalid_upgrade_type():
-    input = CreateVersionArgs("test_upgrade", "1.2.3")
+    input = CreateVersionArgs("test_upgrade", "1.2.3", "test/test_image_config.json")
     with pytest.raises(Exception):
         create_major_version_artifacts(input)
     with pytest.raises(Exception):
@@ -217,6 +229,7 @@ def _create_and_assert_patch_version_upgrade(
     pre_release_identifier=None,
     include_additional_package=False,
     use_existing_package_as_additional_package=False,
+    image_config_file="test/test_image_config.json",
 ):
     input_version = "0.2.5"
     next_version = get_semver("0.2.6")
@@ -234,9 +247,9 @@ def _create_and_assert_patch_version_upgrade(
         mocker, tmp_path, str(next_version), include_additional_package, use_existing_package_as_additional_package
     )
     if include_additional_package:
-        args = CreateVersionArgs("patch", input_version, pre_release_identifier=pre_release_identifier, force=True)
+        args = CreateVersionArgs("patch", input_version, image_config_file, pre_release_identifier=pre_release_identifier, force=True)
     else:
-        args = CreateVersionArgs("patch", input_version, pre_release_identifier=pre_release_identifier)
+        args = CreateVersionArgs("patch", input_version, image_config_file, pre_release_identifier=pre_release_identifier)
     create_patch_version_artifacts(args)
     # Assert new version directory is created
 
@@ -287,7 +300,7 @@ def test_create_new_version_artifacts_for_patch_version_upgrade_with_additional_
 
 @patch("os.path.relpath")
 def test_create_new_version_artifacts_for_patch_version_upgrade_with_prerelease(rel_path, mocker, tmp_path):
-    _create_and_assert_patch_version_upgrade(rel_path, mocker, tmp_path, "beta")
+    _create_and_assert_patch_version_upgrade(rel_path, mocker, tmp_path, pre_release_identifier="beta")
 
 
 def _create_and_assert_minor_version_upgrade(
@@ -297,6 +310,7 @@ def _create_and_assert_minor_version_upgrade(
     pre_release_identifier=None,
     include_additional_package=False,
     use_existing_package_as_additional_package=False,
+    image_config_file="test/test_image_config.json",
 ):
     input_version = "1.2.5"
     next_version = get_semver("1.3.0")
@@ -316,9 +330,9 @@ def _create_and_assert_minor_version_upgrade(
         mocker, tmp_path, "1.3.0", include_additional_package, use_existing_package_as_additional_package
     )
     if include_additional_package:
-        args = CreateVersionArgs("minor", input_version, pre_release_identifier=pre_release_identifier, force=True)
+        args = CreateVersionArgs("minor", input_version, image_config_file, pre_release_identifier=pre_release_identifier, force=True)
     else:
-        args = CreateVersionArgs("minor", input_version, pre_release_identifier=pre_release_identifier)
+        args = CreateVersionArgs("minor", input_version, image_config_file, pre_release_identifier=pre_release_identifier)
     create_minor_version_artifacts(args)
     # Assert new version directory is created
     assert os.path.exists(new_version_dir)
@@ -378,6 +392,7 @@ def _create_and_assert_major_version_upgrade(
     pre_release_identifier=None,
     include_additional_package=False,
     use_existing_package_as_additional_package=False,
+    image_config_file="test/test_image_config.json"
 ):
     input_version = "0.2.5"
     next_version = get_semver("1.0.0")
@@ -397,9 +412,9 @@ def _create_and_assert_major_version_upgrade(
         mocker, tmp_path, str(next_version), include_additional_package, use_existing_package_as_additional_package
     )
     if include_additional_package:
-        args = CreateVersionArgs("major", input_version, pre_release_identifier=pre_release_identifier, force=True)
+        args = CreateVersionArgs("major", input_version, image_config_file, pre_release_identifier=pre_release_identifier, force=True)
     else:
-        args = CreateVersionArgs("major", input_version, pre_release_identifier=pre_release_identifier)
+        args = CreateVersionArgs("major", input_version, image_config_file, pre_release_identifier=pre_release_identifier)
     create_major_version_artifacts(args)
     # Assert new version directory is created
     assert os.path.exists(new_version_dir)
@@ -454,22 +469,22 @@ def test_create_new_version_artifacts_for_major_version_upgrade_with_prerelease(
 
 def test_build_images(mocker, tmp_path):
     mock_docker_from_env = MagicMock(name="_docker_client")
-    mocker.patch("main._docker_client", new=mock_docker_from_env)
+    mocker.patch("sagemaker_image_builder.main._docker_client", new=mock_docker_from_env)
     version = "1.124.5"
-    args = BuildImageArgs(version)
+    image_config_file="test/test_image_config.json"
+    args = BuildImageArgs(version, image_config_file)
 
     def mock_get_dir_for_version(base_version):
         version_string = f"v{base_version.major}.{base_version.minor}.{base_version.patch}"
         # get_dir_for_version returns a str and not a PosixPath
         return str(tmp_path) + "/" + version_string
 
-    mocker.patch("main.get_dir_for_version", side_effect=mock_get_dir_for_version)
+    mocker.patch("sagemaker_image_builder.main.get_dir_for_version", side_effect=mock_get_dir_for_version)
     input_version = get_semver(version)
     # Create directory for base version
-    input_version_dir = create_and_get_semver_dir(input_version)
+    input_version_dir = create_and_get_semver_dir(input_version, _image_generator_configs)
     # Create env.in for base version
     _create_docker_cpu_env_in_file(input_version_dir + "/cpu.env.in")
-    _create_docker_cpu_env_in_file(input_version_dir + "/gpu.env.in")
     _create_prev_docker_file(input_version_dir + "/Dockerfile")
     # Assert env.out doesn't exist
     assert os.path.exists(input_version_dir + "/cpu.env.out") is False
@@ -567,7 +582,7 @@ def _test_push_images_upstream(mocker, repository):
     expected_client_name = "ecr-public" if repository.startswith("public.ecr.aws") else "ecr"
     boto3_mocker = mocker.patch("boto3.client", return_value=boto3_client)
     mock_docker_from_env = MagicMock(name="_docker_client")
-    mocker.patch("main._docker_client", new=mock_docker_from_env)
+    mocker.patch("sagemaker_image_builder.main._docker_client", new=mock_docker_from_env)
     authorization_token_string = "username:password"
     encoded_authorization_token = base64.b64encode(authorization_token_string.encode("ascii"))
     authorization_data = {"authorizationToken": encoded_authorization_token}
@@ -652,7 +667,7 @@ def test_generate_release_notes(tmp_path):
     _create_docker_gpu_env_in_file(target_version_dir + "/gpu.env.in")
     _create_docker_gpu_env_out_file(target_version_dir + "/gpu.env.out")
     # Verify _get_image_type_package_metadata
-    image_type_package_metadata = _get_image_type_package_metadata(target_version_dir)
+    image_type_package_metadata = _get_image_type_package_metadata(target_version_dir, _image_generator_configs)
     assert len(image_type_package_metadata) == 2
     assert image_type_package_metadata["gpu"] == {"numpy": "1.24.2"}
     assert image_type_package_metadata["cpu"] == {"ipykernel": "6.21.6", "boto3": "1.23.4"}

@@ -1,17 +1,21 @@
 from __future__ import absolute_import
 
+import json
+
 import pytest
 
 pytestmark = pytest.mark.unit
 
 from unittest.mock import patch
 
-from config import _image_generator_configs
-from package_report import (
+from sagemaker_image_builder.package_report import (
     _generate_python_package_size_report_per_image,
     _get_installed_package_versions_and_conda_versions,
 )
-from utils import get_match_specs, get_semver
+from sagemaker_image_builder.utils import get_match_specs, get_semver
+
+with open("test/test_image_config.json") as jsonfile:
+    _image_generator_configs = json.load(jsonfile)
 
 
 def _create_env_in_docker_file(file_path):
@@ -115,7 +119,7 @@ def test_get_installed_package_versions_and_conda_versions(mock_run_command, tmp
     assert latest_package_versions_in_conda_forge["numpy"] == "2.1.0"
 
 
-def test_generate_package_size_report(capsys):
+def test_generate_package_size_report(capsys, tmp_path):
     base_pkg_metadata = _create_base_image_package_metadata()
     target_pkg_metadata = _create_target_image_package_metadata()
 
@@ -146,7 +150,7 @@ def test_generate_package_size_report(capsys):
     )
 
 
-def test_generate_package_size_report_when_base_version_is_not_present(capsys):
+def test_generate_package_size_report_when_base_version_is_not_present(capsys, tmp_path):
     target_pkg_metadata = _create_target_image_package_metadata()
 
     _generate_python_package_size_report_per_image(

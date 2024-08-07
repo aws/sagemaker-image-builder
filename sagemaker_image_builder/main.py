@@ -2,30 +2,30 @@ import argparse
 import base64
 import copy
 import glob
+import json
 import os
 import shutil
 
 import boto3
 import docker
-import pytest
 from conda.models.match_spec import MatchSpec
 from docker.errors import BuildError, ContainerError
 from semver import Version
 
-from changelog_generator import generate_change_log
-from config import _image_generator_configs
-from dependency_upgrader import (
+from sagemaker_image_builder.changelog_generator import generate_change_log
+from sagemaker_image_builder.dependency_upgrader import (
     _MAJOR,
     _MINOR,
     _PATCH,
     _get_dependency_upper_bound_for_runtime_upgrade,
 )
-from package_report import (
+from sagemaker_image_builder.package_report import (
     generate_package_size_report,
     generate_package_staleness_report,
 )
-from release_notes_generator import generate_release_notes
-from utils import (
+from sagemaker_image_builder.release_notes_generator import generate_release_notes
+from sagemaker_image_builder.utils import (
+    dump_conda_package_metadata,
     get_dir_for_version,
     get_match_specs,
     get_semver,
@@ -35,7 +35,7 @@ from utils import (
 _docker_client = docker.from_env()
 
 
-def create_and_get_semver_dir(version: Version, exist_ok: bool = False):
+def create_and_get_semver_dir(version: Version, image_config: list[dict], exist_ok: bool = False):
     dir = get_dir_for_version(version)
 
     if os.path.exists(dir):
@@ -44,15 +44,15 @@ def create_and_get_semver_dir(version: Version, exist_ok: bool = False):
         if not os.path.isdir(dir):
             raise Exception()
         # Delete all files except the additional_packages_env_in_file
-        _delete_all_files_except_additional_packages_input_files(dir)
+        _delete_all_files_except_additional_packages_input_files(dir, image_config)
     else:
         os.makedirs(dir)
     return dir
 
 
-def _delete_all_files_except_additional_packages_input_files(base_version_dir):
+def _delete_all_files_except_additional_packages_input_files(base_version_dir, image_config):
     additional_package_env_in_files = [
-        image_generator_config["additional_packages_env_in_file"] for image_generator_config in _image_generator_configs
+        image_generator_config["additional_packages_env_in_file"] for image_generator_config in image_config
     ]
     for filename in os.listdir(base_version_dir):
         if filename not in additional_package_env_in_files:
@@ -67,6 +67,8 @@ def _delete_all_files_except_additional_packages_input_files(base_version_dir):
 
 
 def _create_new_version_artifacts(args):
+    with open(args.image_config_file) as jsonfile:
+        image_config = json.load(jsonfile)
     runtime_version_upgrade_type = args.runtime_version_upgrade_type
 
     if runtime_version_upgrade_type == _PATCH:
@@ -90,9 +92,9 @@ def _create_new_version_artifacts(args):
         next_version = next_version.replace(prerelease=args.pre_release_identifier)
 
     base_version_dir = get_dir_for_version(base_patch_version)
-    new_version_dir = create_and_get_semver_dir(next_version, args.force)
+    new_version_dir = create_and_get_semver_dir(next_version, image_config, args.force)
 
-    for image_generator_config in _image_generator_configs:
+    for image_generator_config in image_config:
         _create_new_version_conda_specs(
             base_version_dir, new_version_dir, runtime_version_upgrade_type, image_generator_config
         )
@@ -179,20 +181,18 @@ def create_patch_version_artifacts(args):
 
 
 def build_images(args):
+    with open(args.image_config_file) as jsonfile:
+        image_config = json.load(jsonfile)
     target_version = get_semver(args.target_patch_version)
-    image_ids, image_versions = _build_local_images(target_version, args.target_ecr_repo, args.force, args.skip_tests)
-    generate_release_notes(target_version)
+    image_ids, image_versions = _build_local_images(
+        target_version, args.target_ecr_repo, image_config, args.force
+    )
+    generate_release_notes(target_version, image_config)
 
     # Upload to ECR before running tests so that only the exact image which we tested goes to public
     # TODO: Move after tests are stabilized
     if args.target_ecr_repo is not None:
         _push_images_upstream(image_versions, args.region)
-
-    if not args.skip_tests:
-        print(f"Will now run tests against: {image_ids}")
-        _test_local_images(image_ids, args.target_patch_version)
-    else:
-        print("Will skip tests.")
 
 
 def _push_images_upstream(image_versions_to_push: list[dict[str, str]], region: str):
@@ -205,20 +205,6 @@ def _push_images_upstream(image_versions_to_push: list[dict[str, str]], region: 
         )
 
     print(f"Successfully pushed these images to ECR: {image_versions_to_push}")
-
-
-def _test_local_images(image_ids_to_test: list[str], target_version: str):
-    assert len(image_ids_to_test) == len(_image_generator_configs)
-    exit_codes = []
-    image_ids = []
-    for image_id, config in zip(image_ids_to_test, _image_generator_configs):
-        exit_code = pytest.main(
-            ["-n", "2", "-m", config["image_type"], "--local-image-version", target_version, *config["pytest_flags"]]
-        )
-
-        assert exit_code == 0, f"Tests failed with exit codes: {exit_codes} against: {image_ids}"
-
-    print(f"Tests ran successfully against: {image_ids_to_test}")
 
 
 def _get_config_for_image(target_version_dir: str, image_generator_config, force_rebuild) -> dict:
@@ -237,18 +223,18 @@ def _get_config_for_image(target_version_dir: str, image_generator_config, force
 # multiple different strings - for e.g., a CPU image can be tagged as '1.3.2-cpu', '1.3-cpu', '1-cpu' and/or
 # 'latest-cpu'. Therefore, (1) is strictly a subset of (2).
 def _build_local_images(
-    target_version: Version, target_ecr_repo_list: list[str], force: bool, skip_tests=False
+    target_version: Version, target_ecr_repo_list: list[str], image_config: list[dict], force: bool
 ) -> (list[str], list[dict[str, str]]):
     target_version_dir = get_dir_for_version(target_version)
 
     generated_image_ids = []
     generated_image_versions = []
 
-    for image_generator_config in _image_generator_configs:
+    for image_generator_config in image_config:
         config = _get_config_for_image(target_version_dir, image_generator_config, force)
         try:
             image, log_gen = _docker_client.images.build(
-                path=target_version_dir, rm=True, pull=True, buildargs=config["build_args"]
+                path=target_version_dir, quiet=False, rm=True, pull=True, buildargs=config["build_args"]
             )
         except BuildError as e:
             for line in e.build_log:
@@ -260,7 +246,7 @@ def _build_local_images(
         generated_image_ids.append(image.id)
         try:
             container_logs = _docker_client.containers.run(
-                image=image.id, detach=False, auto_remove=True, command="micromamba env export --explicit"
+                image=image.id, detach=False, auto_remove=True, command="conda list --explicit"
             )
         except ContainerError as e:
             print(e.container.logs().decode("utf-8"))
@@ -274,8 +260,8 @@ def _build_local_images(
         # of the actual env.in file instead of the 'config'.
         generate_change_log(target_version, image_generator_config)
 
-        version_tags_to_apply = _get_version_tags(target_version, config["env_out_filename"])
-        image_tags_to_apply = [config["image_tag_generator"].format(image_version=i) for i in version_tags_to_apply]
+        image_tag_suffix = config["image_tag_suffix"] if "image_tag_suffix" in config else ""
+        image_tags_to_apply = [f"{i}{image_tag_suffix}" for i in _get_version_tags(target_version, config["env_out_filename"])]
 
         if target_ecr_repo_list is not None:
             for target_ecr_repo in target_ecr_repo_list:
@@ -285,7 +271,7 @@ def _build_local_images(
 
         # Tag the image for testing
         image.tag(
-            "localhost/sagemaker-distribution", config["image_tag_generator"].format(image_version=str(target_version))
+            f"localhost/{config["image_name"]}", f"{str(target_version)}{image_tag_suffix}"
         )
 
     return generated_image_ids, generated_image_versions
@@ -342,23 +328,23 @@ def _get_ecr_credentials(region, repository: str) -> (str, str):
 
 def get_arg_parser():
     parser = argparse.ArgumentParser(
-        description="A command line utility to create new versions of Amazon SageMaker Distribution"
+        description="A command line utility to create new image versions."
     )
 
     subparsers = parser.add_subparsers(dest="subcommand")
 
     create_major_version_parser = subparsers.add_parser(
-        "create-major-version-artifacts", help="Creates a new major version of Amazon SageMaker Distribution."
+        "create-major-version-artifacts", help="Creates a new image major version."
     )
     create_major_version_parser.set_defaults(func=create_major_version_artifacts, runtime_version_upgrade_type=_MAJOR)
 
     create_minor_version_parser = subparsers.add_parser(
-        "create-minor-version-artifacts", help="Creates a new minor version of Amazon SageMaker Distribution."
+        "create-minor-version-artifacts", help="Creates a new image minor version."
     )
     create_minor_version_parser.set_defaults(func=create_minor_version_artifacts, runtime_version_upgrade_type=_MINOR)
 
     create_patch_version_parser = subparsers.add_parser(
-        "create-patch-version-artifacts", help="Creates a new patch version of Amazon SageMaker Distribution."
+        "create-patch-version-artifacts", help="Creates a new image patch version."
     )
     create_patch_version_parser.set_defaults(func=create_patch_version_artifacts, runtime_version_upgrade_type=_PATCH)
 
@@ -370,8 +356,13 @@ def get_arg_parser():
             help="Specify the base patch version from which a new version should be created.",
         )
         p.add_argument(
+            "--image-config-file",
+            required=True,
+            help="A json file contains the docker image generator configuration.",
+        )
+        p.add_argument(
             "--pre-release-identifier",
-            help="Optionally specify the pre-release identifier for this new version that should " "be created.",
+            help="Optionally specify the pre-release identifier for this new version that should be created.",
         )
         p.add_argument(
             "--force",
@@ -383,10 +374,12 @@ def get_arg_parser():
     build_image_parser.add_argument(
         "--target-patch-version",
         required=True,
-        help="Specify the target version of Amazon SageMaker Distribution for which an image needs to be built.",
+        help="Specify the target version of image needs to be built.",
     )
     build_image_parser.add_argument(
-        "--skip-tests", action="store_true", help="Disable running tests against the newly generated Docker image."
+        "--image-config-file",
+        required=True,
+        help="A json file containing the docker image generator configuration.",
     )
     build_image_parser.add_argument(
         "--force",
@@ -401,30 +394,58 @@ def get_arg_parser():
     )
     build_image_parser.add_argument("--region", help="Specify the region of the ECR repository.")
     build_image_parser.set_defaults(func=build_images)
+
     package_staleness_parser = subparsers.add_parser(
         "generate-staleness-report",
-        help="Generates package staleness report for each of the marquee packages in the given " "image version.",
+        help="Generates package staleness report for each of the marquee packages in the given image version.",
     )
     package_staleness_parser.set_defaults(func=generate_package_staleness_report)
     package_staleness_parser.add_argument(
+        "--image-config-file",
+        required=True,
+        help="A json file contains the docker image generator configuration.",
+    )
+    package_staleness_parser.add_argument(
         "--target-patch-version",
         required=True,
-        help="Specify the base patch version for which the package staleness report needs to be " "generated.",
+        help="Specify the base patch version for which the package staleness report needs to be generated.",
     )
+
     package_size_parser = subparsers.add_parser(
         "generate-size-report",
-        help="Generates package size report for each of the packages in the given " "image version.",
+        help="Generates package size report for each of the packages in the given image version.",
     )
     package_size_parser.set_defaults(func=generate_package_size_report)
     package_size_parser.add_argument(
+        "--image-config-file",
+        required=True,
+        help="A json file contains the docker image generator configuration.",
+    )
+    package_size_parser.add_argument(
+        "--base-patch-version",
+        required=False,
+        help="Specify the base patch version for which the package size report needs to be generated.",
+    )
+    package_size_parser.add_argument(
         "--target-patch-version",
         required=True,
-        help="Specify the target patch version for which the package size report needs to be " "generated.",
+        help="Specify the target patch version for which the package size report needs to be generated.",
     )
     package_size_parser.add_argument(
         "--validate",
         action="store_true",
         help="Validate package size delta and raise error if the validation failed.",
+    )
+
+    conda_package_metadata_parser = subparsers.add_parser(
+        "get-conda-package-metadata",
+        help="Collect and dump conda package versions and sizes in current activated conda environment.",
+    )
+    conda_package_metadata_parser.set_defaults(func=dump_conda_package_metadata)
+    conda_package_metadata_parser.add_argument(
+        "-H", "--human-readable",
+        action="store_true",
+        help="Print human-readable size information"
     )
     return parser
 
@@ -437,5 +458,9 @@ def parse_args(parser):
         args.func(args)
 
 
-if __name__ == "__main__":
+def main():
     parse_args(get_arg_parser())
+
+
+if __name__ == "__main__":
+    main()
