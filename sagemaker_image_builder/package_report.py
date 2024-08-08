@@ -5,15 +5,14 @@ from itertools import islice
 import conda.cli.python_api
 from conda.models.match_spec import MatchSpec
 
-from config import _image_generator_configs
-from dependency_upgrader import _dependency_metadata
-from utils import (
+from sagemaker_image_builder.dependency_upgrader import _dependency_metadata
+from sagemaker_image_builder.utils import (
     create_markdown_table,
     get_dir_for_version,
     get_match_specs,
     get_semver,
-    pull_conda_package_metadata,
     sizeof_fmt,
+    pull_conda_package_metadata
 )
 
 
@@ -61,29 +60,24 @@ def _generate_staleness_report_per_image(
     package_versions_in_upstream, target_packages_match_spec_out, image_config, version
 ):
     print("\n# Staleness Report: " + str(version) + "(" + image_config["image_type"] + ")\n")
-    staleness_report_rows = []
+    print("Package | Current Version in the image | Latest Relevant Version in " "Upstream")
+    print("---|---|---")
     for package in package_versions_in_upstream:
-        version_in_sagemaker_distribution = str(target_packages_match_spec_out[package].get("version")).removeprefix(
+        version_in_image = str(target_packages_match_spec_out[package].get("version")).removeprefix(
             "=="
         )
-        package_string = (
-            package
-            if version_in_sagemaker_distribution == package_versions_in_upstream[package]
-            else "${\color{red}" + package + "}$"
-        )
-        staleness_report_rows.append(
-            {
-                "package": package_string,
-                "version_in_sagemaker_distribution": version_in_sagemaker_distribution,
-                "latest_relavant_version": package_versions_in_upstream[package],
-            }
-        )
-    print(
-        create_markdown_table(
-            ["Package", "Current Version in the Distribution image", "Latest Relevant Version in " "Upstream"],
-            staleness_report_rows,
-        )
-    )
+        if version_in_image == package_versions_in_upstream[package]:
+            print(package + "|" + version_in_image + "|" + package_versions_in_upstream[package])
+        else:
+            print(
+                "${\color{red}"
+                + package
+                + "}$"
+                + "|"
+                + version_in_image
+                + "|"
+                + package_versions_in_upstream[package]
+            )
 
 
 def _get_installed_package_versions_and_conda_versions(
@@ -104,6 +98,34 @@ def _get_installed_package_versions_and_conda_versions(
     )
     return target_packages_match_spec_out, latest_package_versions_in_upstream
 
+def _validate_new_package_size(new_package_total_size, target_total_size, image_type, target_version):
+    # Validate if the new packages account for <= 5% of the total python package size of target image.
+    new_package_total_size_percent_threshold = 5
+    validate_result = None
+    new_package_total_size_percent = round(new_package_total_size / target_total_size * 100, 2)
+    new_package_total_size_percent_string = str(new_package_total_size_percent)
+    if new_package_total_size_percent > new_package_total_size_percent_threshold:
+        validate_result = (
+            "The total size of newly introduced Python packages accounts for more than "
+            + str(new_package_total_size_percent_threshold)
+            + "% of the total Python package size of "
+            + image_type
+            + " image, version "
+            + str(target_version)
+            + "! ("
+            + str(new_package_total_size_percent)
+            + "%)"
+        )
+        new_package_total_size_percent_string = "${\color{red}" + str(new_package_total_size_percent) + "}$"
+
+    print(
+        "The total size of newly introduced Python packages is "
+        + sizeof_fmt(new_package_total_size)
+        + ", accounts for "
+        + new_package_total_size_percent_string
+        + "% of the total package size."
+    )
+    return validate_result
 
 def _validate_new_package_size(new_package_total_size, target_total_size, image_type, target_version):
     # Validate if the new packages account for <= 5% of the total python package size of target image.
@@ -222,9 +244,11 @@ def _generate_python_package_size_report_per_image(
 
 
 def generate_package_staleness_report(args):
+    with open(args.image_config_file) as jsonfile:
+        image_configs = json.load(jsonfile)
     target_version = get_semver(args.target_patch_version)
     target_version_dir = get_dir_for_version(target_version)
-    for image_config in _image_generator_configs:
+    for image_config in image_configs:
         (
             target_packages_match_spec_out,
             latest_package_versions_in_upstream,
@@ -235,6 +259,8 @@ def generate_package_staleness_report(args):
 
 
 def generate_package_size_report(args):
+    with open(args.image_config_file) as jsonfile:
+        _image_generator_configs = json.load(jsonfile)
     target_version = get_semver(args.target_patch_version)
     target_version_dir = get_dir_for_version(target_version)
 

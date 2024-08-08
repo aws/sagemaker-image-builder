@@ -1,0 +1,20 @@
+# Run: conda env update --file environment.yml
+channels:
+  - conda-forge
+dependencies:
+  - conda
+  - docker-py
+  - pip
+  - build
+  - twine
+  - boto3
+  - pytest
+  - pytest-mock
+  - pytest-xdist
+  - semver
+  - autoflake
+  - black
+  - isort
+  - pre-commit
+  - pip:
+    - -e .

@@ -1,0 +1,4 @@
+/*.iml
+/dist/
+/sagemaker_image_builder.egg-info/
+*/__pycache__/

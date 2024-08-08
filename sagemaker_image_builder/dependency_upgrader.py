@@ -48,13 +48,10 @@ _version_upgrade_metadata = {
     # Somewhat interestingly, 'calver' (see: https://calver.org/) also falls in the same category. Take Dask as an
     # example. Its versioning strategy is 'YYYY.MM.n' (where 'n' starts as 0 and increases by 1 every time a release
     # happens in the given month). So, 2nd release in December 2022 was versioned as '2022.12.1'.
-    # In Amazon SageMaker Distribution, we want to move to a new month only during a minor version upgrade and new year
-    # during a major version upgrade.
     "semver": {"func": _get_dependency_upper_bound_for_semver},
     # Some dependencies follow, for lack of a better word, "python style" release cycles. For e.g., even if Python does
-    # a minor version upgrade from 3.9 to 3.10, we will only introduce 3.10 in Amazon SageMaker Distribution as part of
-    # a major version upgrade. In other words, for dependencies below, minor version upgrades are treated as major
-    # version upgrades in Amazon SageMaker Distribution.
+    # a minor version upgrade from 3.9 to 3.10, we will only introduce 3.10 in an image as part of a major version upgrade.
+    # In other words, for dependencies below, minor version upgrades are treated as major version upgrades in an image.
     "pythonesque": {"func": _get_dependency_upper_bound_for_pythonesque},
 }
 
