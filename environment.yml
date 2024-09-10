@@ -5,7 +5,6 @@ dependencies:
   - conda
   - docker-py
   - pip
-  - build
   - twine
   - boto3
   - pytest
