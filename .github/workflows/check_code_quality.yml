@@ -41,8 +41,8 @@ jobs:
       - name: Activate sagemaker-image-builder
         run: micromamba activate sagemaker-image-builder
       - name: Check style with black
-        run: black --line-length=120 --check src test
+        run: black --line-length=120 --check sagemaker_image_builder test
       - name: Check style with autoflake
-        run: autoflake --in-place --expand-star-imports --ignore-init-module-imports --remove-all-unused-imports -rc src test
+        run: autoflake --in-place --expand-star-imports --ignore-init-module-imports --remove-all-unused-imports -rc sagemaker_image_builder test
       - name: Check style with isort
-        run: isort --profile black -c src test
+        run: isort --profile black -c sagemaker_image_builder test
