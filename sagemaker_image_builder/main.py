@@ -4,7 +4,9 @@ import copy
 import glob
 import json
 import os
+import re
 import shutil
+import subprocess
 
 import boto3
 import docker
@@ -232,16 +234,32 @@ def _build_local_images(
 
     for image_generator_config in image_config:
         config = _get_config_for_image(target_version_dir, image_generator_config, force)
+        # BuildKit must be used for volume mounting during build, but isn't supported by docker-py (https://github.com/docker/docker-py/issues/2230)
+        # So instead we enable via env variable, and then call docker build via cli.
+        os.environ["DOCKER_BUILDKIT"] = "1"
+        raw_build_result = ""
+        # Docker build takes args like `--build-arg Key1=Value1 --build-arg Key2=Value2`
+        build_arg_options = sum([['--build-arg', f'{k}={v}'] for k, v in config["build_args"].items()], [])
+        docker_build_command = ["docker", "build", "--rm", "--pull"] + build_arg_options + [f"./{target_version_dir}"]
         try:
-            image, log_gen = _docker_client.images.build(
-                path=target_version_dir, quiet=False, rm=True, pull=True, buildargs=config["build_args"]
-            )
-        except BuildError as e:
-            for line in e.build_log:
-                if "stream" in line:
-                    print(line["stream"].strip())
-            # After printing the logs, raise the exception (which is the old behavior)
+            raw_build_result = subprocess.check_output(docker_build_command, stderr=subprocess.STDOUT, universal_newlines=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Build failed with exit code {e.returncode}. Output:")
+            # Prints output from Docker build
+            print(e.output)
             raise
+
+        # Parse the output
+        image_id = None
+        for line in raw_build_result.splitlines():
+            if line.startswith("#"):
+                # Image id format in Docker build output
+                if "writing image sha256:" in line.lower():
+                    match = re.search(r'sha256:([a-f0-9]+)', line)
+                    if match:
+                        image_id = match.group(1)
+        # Now we can get image using docker-py
+        image = _docker_client.images.get(image_id)
         print(f"Successfully built an image with id: {image.id}")
         generated_image_ids.append(image.id)
         try:
