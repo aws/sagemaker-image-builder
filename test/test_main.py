@@ -6,8 +6,8 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
-import os
 import json
+import os
 from unittest.mock import MagicMock, Mock, patch
 
 from sagemaker_image_builder.changelog_generator import _derive_changeset

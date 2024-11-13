@@ -11,8 +11,8 @@ from sagemaker_image_builder.utils import (
     get_dir_for_version,
     get_match_specs,
     get_semver,
-    sizeof_fmt,
     pull_conda_package_metadata,
+    sizeof_fmt,
 )
 
 

@@ -11,7 +11,7 @@ import subprocess
 import boto3
 import docker
 from conda.models.match_spec import MatchSpec
-from docker.errors import BuildError, ContainerError
+from docker.errors import ContainerError
 from semver import Version
 
 from sagemaker_image_builder.changelog_generator import generate_change_log
