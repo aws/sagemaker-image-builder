@@ -6,8 +6,8 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
-import os
 import json
+import os
 from unittest.mock import MagicMock, Mock, patch
 
 from sagemaker_image_builder.changelog_generator import _derive_changeset
@@ -32,7 +32,14 @@ with open("test/test_image_config.json") as jsonfile:
 
 
 class CreateVersionArgs:
-    def __init__(self, runtime_version_upgrade_type, base_patch_version, image_config_file, pre_release_identifier=None, force=False):
+    def __init__(
+        self,
+        runtime_version_upgrade_type,
+        base_patch_version,
+        image_config_file,
+        pre_release_identifier=None,
+        force=False,
+    ):
         self.base_patch_version = base_patch_version
         self.runtime_version_upgrade_type = runtime_version_upgrade_type
         self.pre_release_identifier = pre_release_identifier
@@ -164,6 +171,7 @@ def _create_additional_packages_env_in_file_helper(
         else:
             _create_additional_packages_gpu_env_in_file(additional_env_in_file_path)
 
+
 def test_get_semver_version():
     # Test invalid version string.
     with pytest.raises(Exception):
@@ -247,9 +255,13 @@ def _create_and_assert_patch_version_upgrade(
         mocker, tmp_path, str(next_version), include_additional_package, use_existing_package_as_additional_package
     )
     if include_additional_package:
-        args = CreateVersionArgs("patch", input_version, image_config_file, pre_release_identifier=pre_release_identifier, force=True)
+        args = CreateVersionArgs(
+            "patch", input_version, image_config_file, pre_release_identifier=pre_release_identifier, force=True
+        )
     else:
-        args = CreateVersionArgs("patch", input_version, image_config_file, pre_release_identifier=pre_release_identifier)
+        args = CreateVersionArgs(
+            "patch", input_version, image_config_file, pre_release_identifier=pre_release_identifier
+        )
     create_patch_version_artifacts(args)
     # Assert new version directory is created
 
@@ -330,9 +342,13 @@ def _create_and_assert_minor_version_upgrade(
         mocker, tmp_path, "1.3.0", include_additional_package, use_existing_package_as_additional_package
     )
     if include_additional_package:
-        args = CreateVersionArgs("minor", input_version, image_config_file, pre_release_identifier=pre_release_identifier, force=True)
+        args = CreateVersionArgs(
+            "minor", input_version, image_config_file, pre_release_identifier=pre_release_identifier, force=True
+        )
     else:
-        args = CreateVersionArgs("minor", input_version, image_config_file, pre_release_identifier=pre_release_identifier)
+        args = CreateVersionArgs(
+            "minor", input_version, image_config_file, pre_release_identifier=pre_release_identifier
+        )
     create_minor_version_artifacts(args)
     # Assert new version directory is created
     assert os.path.exists(new_version_dir)
@@ -392,7 +408,7 @@ def _create_and_assert_major_version_upgrade(
     pre_release_identifier=None,
     include_additional_package=False,
     use_existing_package_as_additional_package=False,
-    image_config_file="test/test_image_config.json"
+    image_config_file="test/test_image_config.json",
 ):
     input_version = "0.2.5"
     next_version = get_semver("1.0.0")
@@ -412,9 +428,13 @@ def _create_and_assert_major_version_upgrade(
         mocker, tmp_path, str(next_version), include_additional_package, use_existing_package_as_additional_package
     )
     if include_additional_package:
-        args = CreateVersionArgs("major", input_version, image_config_file, pre_release_identifier=pre_release_identifier, force=True)
+        args = CreateVersionArgs(
+            "major", input_version, image_config_file, pre_release_identifier=pre_release_identifier, force=True
+        )
     else:
-        args = CreateVersionArgs("major", input_version, image_config_file, pre_release_identifier=pre_release_identifier)
+        args = CreateVersionArgs(
+            "major", input_version, image_config_file, pre_release_identifier=pre_release_identifier
+        )
     create_major_version_artifacts(args)
     # Assert new version directory is created
     assert os.path.exists(new_version_dir)
@@ -471,7 +491,7 @@ def test_build_images(mocker, tmp_path):
     mock_docker_from_env = MagicMock(name="_docker_client")
     mocker.patch("sagemaker_image_builder.main._docker_client", new=mock_docker_from_env)
     version = "1.124.5"
-    image_config_file="test/test_image_config.json"
+    image_config_file = "test/test_image_config.json"
     args = BuildImageArgs(version, image_config_file)
 
     def mock_get_dir_for_version(base_version):

@@ -11,8 +11,8 @@ from sagemaker_image_builder.utils import (
     get_dir_for_version,
     get_match_specs,
     get_semver,
+    pull_conda_package_metadata,
     sizeof_fmt,
-    pull_conda_package_metadata
 )
 
 
@@ -63,20 +63,12 @@ def _generate_staleness_report_per_image(
     print("Package | Current Version in the image | Latest Relevant Version in " "Upstream")
     print("---|---|---")
     for package in package_versions_in_upstream:
-        version_in_image = str(target_packages_match_spec_out[package].get("version")).removeprefix(
-            "=="
-        )
+        version_in_image = str(target_packages_match_spec_out[package].get("version")).removeprefix("==")
         if version_in_image == package_versions_in_upstream[package]:
             print(package + "|" + version_in_image + "|" + package_versions_in_upstream[package])
         else:
             print(
-                "${\color{red}"
-                + package
-                + "}$"
-                + "|"
-                + version_in_image
-                + "|"
-                + package_versions_in_upstream[package]
+                "${\color{red}" + package + "}$" + "|" + version_in_image + "|" + package_versions_in_upstream[package]
             )
 
 
@@ -97,6 +89,7 @@ def _get_installed_package_versions_and_conda_versions(
         target_packages_match_spec_out, target_version
     )
     return target_packages_match_spec_out, latest_package_versions_in_upstream
+
 
 def _validate_new_package_size(new_package_total_size, target_total_size, image_type, target_version):
     # Validate if the new packages account for <= 5% of the total python package size of target image.
@@ -126,6 +119,7 @@ def _validate_new_package_size(new_package_total_size, target_total_size, image_
         + "% of the total package size."
     )
     return validate_result
+
 
 def _validate_new_package_size(new_package_total_size, target_total_size, image_type, target_version):
     # Validate if the new packages account for <= 5% of the total python package size of target image.

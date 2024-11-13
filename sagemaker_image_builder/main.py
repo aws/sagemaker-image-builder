@@ -4,12 +4,14 @@ import copy
 import glob
 import json
 import os
+import re
 import shutil
+import subprocess
 
 import boto3
 import docker
 from conda.models.match_spec import MatchSpec
-from docker.errors import BuildError, ContainerError
+from docker.errors import ContainerError
 from semver import Version
 
 from sagemaker_image_builder.changelog_generator import generate_change_log
@@ -184,9 +186,7 @@ def build_images(args):
     with open(args.image_config_file) as jsonfile:
         image_config = json.load(jsonfile)
     target_version = get_semver(args.target_patch_version)
-    image_ids, image_versions = _build_local_images(
-        target_version, args.target_ecr_repo, image_config, args.force
-    )
+    image_ids, image_versions = _build_local_images(target_version, args.target_ecr_repo, image_config, args.force)
     generate_release_notes(target_version, image_config)
 
     # Upload to ECR before running tests so that only the exact image which we tested goes to public
@@ -232,16 +232,34 @@ def _build_local_images(
 
     for image_generator_config in image_config:
         config = _get_config_for_image(target_version_dir, image_generator_config, force)
+        # BuildKit must be used for volume mounting during build, but isn't supported by docker-py (https://github.com/docker/docker-py/issues/2230)
+        # So instead we enable via env variable, and then call docker build via cli.
+        os.environ["DOCKER_BUILDKIT"] = "1"
+        raw_build_result = ""
+        # Docker build takes args like `--build-arg Key1=Value1 --build-arg Key2=Value2`
+        build_arg_options = sum([["--build-arg", f"{k}={v}"] for k, v in config["build_args"].items()], [])
+        docker_build_command = ["docker", "build", "--rm", "--pull"] + build_arg_options + [f"./{target_version_dir}"]
         try:
-            image, log_gen = _docker_client.images.build(
-                path=target_version_dir, quiet=False, rm=True, pull=True, buildargs=config["build_args"]
+            raw_build_result = subprocess.check_output(
+                docker_build_command, stderr=subprocess.STDOUT, universal_newlines=True
             )
-        except BuildError as e:
-            for line in e.build_log:
-                if "stream" in line:
-                    print(line["stream"].strip())
-            # After printing the logs, raise the exception (which is the old behavior)
+        except subprocess.CalledProcessError as e:
+            print(f"Build failed with exit code {e.returncode}. Output:")
+            # Prints output from Docker build
+            print(e.output)
             raise
+
+        # Parse the output
+        image_id = None
+        for line in raw_build_result.splitlines():
+            if line.startswith("#"):
+                # Image id format in Docker build output
+                if "writing image sha256:" in line.lower():
+                    match = re.search(r"sha256:([a-f0-9]+)", line)
+                    if match:
+                        image_id = match.group(1)
+        # Now we can get image using docker-py
+        image = _docker_client.images.get(image_id)
         print(f"Successfully built an image with id: {image.id}")
         generated_image_ids.append(image.id)
         try:
@@ -261,7 +279,9 @@ def _build_local_images(
         generate_change_log(target_version, image_generator_config)
 
         image_tag_suffix = config["image_tag_suffix"] if "image_tag_suffix" in config else ""
-        image_tags_to_apply = [f"{i}{image_tag_suffix}" for i in _get_version_tags(target_version, config["env_out_filename"])]
+        image_tags_to_apply = [
+            f"{i}{image_tag_suffix}" for i in _get_version_tags(target_version, config["env_out_filename"])
+        ]
 
         if target_ecr_repo_list is not None:
             for target_ecr_repo in target_ecr_repo_list:
@@ -270,9 +290,7 @@ def _build_local_images(
                     generated_image_versions.append({"repository": target_ecr_repo, "tag": t})
 
         # Tag the image for testing
-        image.tag(
-            f"localhost/{config["image_name"]}", f"{str(target_version)}{image_tag_suffix}"
-        )
+        image.tag(f"localhost/{config["image_name"]}", f"{str(target_version)}{image_tag_suffix}")
 
     return generated_image_ids, generated_image_versions
 
@@ -327,9 +345,7 @@ def _get_ecr_credentials(region, repository: str) -> (str, str):
 
 
 def get_arg_parser():
-    parser = argparse.ArgumentParser(
-        description="A command line utility to create new image versions."
-    )
+    parser = argparse.ArgumentParser(description="A command line utility to create new image versions.")
 
     subparsers = parser.add_subparsers(dest="subcommand")
 
@@ -443,9 +459,7 @@ def get_arg_parser():
     )
     conda_package_metadata_parser.set_defaults(func=dump_conda_package_metadata)
     conda_package_metadata_parser.add_argument(
-        "-H", "--human-readable",
-        action="store_true",
-        help="Print human-readable size information"
+        "-H", "--human-readable", action="store_true", help="Print human-readable size information"
     )
     return parser
 
