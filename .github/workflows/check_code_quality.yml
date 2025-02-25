@@ -13,10 +13,6 @@ on:
       - "sagemaker_image_builder/**.py"
       - "test/**.py"
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
-  cancel-in-progress: true
-
 defaults:
   run:
     shell: bash -l {0}
