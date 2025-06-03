@@ -3,7 +3,7 @@ import os
 import pathlib
 
 import conda.cli.python_api
-from conda.env.specs import RequirementsSpec
+from conda.env.specs.requirements import RequirementsSpec
 from conda.models.match_spec import MatchSpec
 from semver import Version
 
